@@ -1,8 +1,10 @@
-from jetnet.datasets import JetNet
-import torch
-from torch_geometric.data import InMemoryDataset, Dataset, Data
 import itertools
+
 import numpy as np
+import torch
+from jetnet.datasets import JetNet
+from torch_geometric.data import Data, InMemoryDataset
+
 
 class JetNetGraph(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
@@ -12,23 +14,23 @@ class JetNetGraph(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return ['t.pt']
+        return ["t.pt"]
 
     @property
     def processed_file_names(self):
-        return ['t_graph.pt']
+        return ["t_graph.pt"]
 
     def download(self):
         # Download to `self.raw_dir`.
-        self.raw_data = JetNet(jet_type='t', use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
+        self.raw_data = JetNet(jet_type="t", use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
 
     def process(self):
         # Read data into huge `Data` list.
         if self.raw_data is None:
-            self.raw_data = JetNet(jet_type='t', use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
+            self.raw_data = JetNet(jet_type="t", use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
         data_list = []
         for i, (x, _) in enumerate(self.raw_data):
-            n_particles = len(x) # can use mask in the future
+            n_particles = len(x)  # can use mask in the future
             pairs = np.stack([[m, n] for (m, n) in itertools.product(range(n_particles), range(n_particles)) if m != n])
             edge_index = torch.tensor(pairs, dtype=torch.long)
             edge_index = edge_index.t().contiguous()
@@ -43,7 +45,8 @@ class JetNetGraph(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
+
 if __name__ == "__main__":
-    dataset = JetNetGraph('../data/JetNet')
+    dataset = JetNetGraph("../data/JetNet")
     for data in dataset:
         print(data)
