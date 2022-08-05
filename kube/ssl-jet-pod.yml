@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ssl-jet-pod
+  labels:
+    app: ssl-jet
+spec:
+  containers:
+  - name: container
+    image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp:latest
+    command: ["/bin/bash", "-c", "sleep infinity"]
+    resources:
+      limits:
+        memory: 8Gi
+        cpu: "2"
+        nvidia.com/gpu: "1"
+      requests:
+        memory: 4Gi
+        cpu: "1"
+        nvidia.com/gpu: "1"
+    volumeMounts:
+    - mountPath: /ssl-jet-vol
+      name: ssl-jet-vol
+  restartPolicy: Never
+  volumes:
+    - name: ssl-jet-vol
+      persistentVolumeClaim:
+        claimName: ssl-jet-vol
+  restartPolicy: Never
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: In
+            values:
+            - NVIDIA-GeForce-GTX-1080-Ti
