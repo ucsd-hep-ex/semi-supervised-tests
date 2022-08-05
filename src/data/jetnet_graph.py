@@ -31,7 +31,8 @@ class JetNetGraph(InMemoryDataset):
             self.raw_data = JetNet(jet_type="t", use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
         data_list = []
         for i, (x, _) in enumerate(self.raw_data):
-            if self.max_jets is not None and i > self.max_jets: break
+            if self.max_jets is not None and i > self.max_jets:
+                break
             n_particles = len(x)  # can use mask in the future
             pairs = np.stack([[m, n] for (m, n) in itertools.product(range(n_particles), range(n_particles)) if m != n])
             edge_index = torch.tensor(pairs, dtype=torch.long)

@@ -2,9 +2,9 @@ import os.path as osp
 
 import torch
 import torch.nn.functional as F
-import torch_geometric.transforms as T
 from torch_geometric.nn import MaskLabel, TransformerConv
 from torch_geometric.utils import index_to_mask
+
 from src.data.jetnet_graph import JetNetGraph
 
 root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
@@ -73,13 +73,17 @@ def test():
     propagation_mask = train_mask
     out = model(data.x, data.x, data.edge_index, propagation_mask)
     pred = out[val_mask]
+    val_loss = F.mse_loss(pred, data.x[val_mask])
 
     propagation_mask = train_mask | val_mask
     out = model(data.x, data.x, data.edge_index, propagation_mask)
     pred = out[test_mask]
+    test_loss = F.mse_loss(pred, data.x[test_mask])
+
+    return val_loss, test_loss
 
 
 for epoch in range(1, 501):
     loss = train()
-    test()
-    print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}")
+    val_loss, test_loss = test()
+    print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Loss: {val_loss:.4f}, Test Loss: {test_loss:.4f}")
