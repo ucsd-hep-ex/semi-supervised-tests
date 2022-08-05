@@ -1,10 +1,10 @@
 import os.path as osp
-
+import math
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import MaskLabel, TransformerConv
 from torch_geometric.utils import index_to_mask
-
+import numpy as np
 from src.data.jetnet_graph import JetNetGraph
 
 root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
@@ -41,15 +41,22 @@ class UniMP(torch.nn.Module):
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-data = dataset.to(device)
-print(data.x.shape)
+data = dataset.data.to(device)
+
 model = UniMP(dataset.num_features, dataset.num_classes, hidden_channels=64, num_layers=3, heads=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
 
-split_idx = dataset.get_idx_split()
-train_mask = index_to_mask(split_idx["train"], size=data.num_nodes)
-val_mask = index_to_mask(split_idx["valid"], size=data.num_nodes)
-test_mask = index_to_mask(split_idx["test"], size=data.num_nodes)
+tv_frac = 0.15
+tv_num = math.ceil(data.num_nodes * tv_frac)
+splits = np.cumsum([data.num_nodes - 2 * tv_num, tv_num, tv_num])
+
+train_index = torch.tensor(np.arange(start=0, stop=splits[0]), dtype=torch.long)
+val_index = torch.tensor(np.arange(start=splits[0], stop=splits[1]), dtype=torch.long)
+test_index = torch.tensor(np.arange(start=splits[1], stop=data.num_nodes), dtype=torch.long)
+
+train_mask = index_to_mask(train_index, size=data.num_nodes)
+val_mask = index_to_mask(val_index, size=data.num_nodes)
+test_mask = index_to_mask(test_index, size=data.num_nodes)
 
 
 def train(label_rate=0.65):  # How many labels to use for propagation.
