@@ -7,7 +7,7 @@ metadata:
 spec:
   containers:
   - name: container
-    image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp:latest
+    image: gitlab-registry.nrp-nautilus.io/jmduarte/semi-supervised-tests
     command: ["/bin/bash", "-c", "sleep infinity"]
     resources:
       limits:
