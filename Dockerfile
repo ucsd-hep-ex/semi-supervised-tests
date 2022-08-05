@@ -16,8 +16,9 @@ RUN mamba install -c pytorch -c conda-forge pytorch=1.12.0 torchvision torchaudi
     && mamba clean --all -f -y
 
 RUN set -x \
-    pip3 install coffea tables mplhep jetnet weaver-core pre-commit \
-    && pip3 install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+    pip3 install coffea tables mplhep jetnet weaver-core pre-commit ogb \
+    && pip3 install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html \
+    && pip3 install git+https://github.com/pyg-team/pytorch_geometric.git
 
 RUN set -x \
     fix-permissions /home/$NB_USER

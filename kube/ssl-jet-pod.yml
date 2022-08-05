@@ -7,31 +7,15 @@ metadata:
 spec:
   containers:
   - name: container
-    image: gitlab-registry.nrp-nautilus.io/jmduarte/semi-supervised-tests
+    image: gitlab-registry.nrp-nautilus.io/jmduarte/semi-supervised-tests:latest
     command: ["/bin/bash", "-c", "sleep infinity"]
     resources:
       limits:
-        memory: 8Gi
-        cpu: "2"
-        nvidia.com/gpu: "1"
-      requests:
-        memory: 4Gi
-        cpu: "1"
         nvidia.com/gpu: "1"
     volumeMounts:
     - mountPath: /ssl-jet-vol
       name: ssl-jet-vol
-  restartPolicy: Never
   volumes:
     - name: ssl-jet-vol
       persistentVolumeClaim:
         claimName: ssl-jet-vol
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: nvidia.com/gpu.product
-            operator: In
-            values:
-            - NVIDIA-GeForce-GTX-1080-Ti
