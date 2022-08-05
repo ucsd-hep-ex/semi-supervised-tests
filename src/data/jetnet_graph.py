@@ -7,8 +7,9 @@ from torch_geometric.data import Data, InMemoryDataset
 
 
 class JetNetGraph(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=1000):
         self.raw_data = None
+        self.max_jets = max_jets
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -30,6 +31,7 @@ class JetNetGraph(InMemoryDataset):
             self.raw_data = JetNet(jet_type="t", use_num_particles_jet_feature=False, use_mask=False, data_dir=self.raw_dir)
         data_list = []
         for i, (x, _) in enumerate(self.raw_data):
+            if self.max_jets is not None and i > self.max_jets: break
             n_particles = len(x)  # can use mask in the future
             pairs = np.stack([[m, n] for (m, n) in itertools.product(range(n_particles), range(n_particles)) if m != n])
             edge_index = torch.tensor(pairs, dtype=torch.long)
@@ -44,9 +46,3 @@ class JetNetGraph(InMemoryDataset):
 
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
-
-
-if __name__ == "__main__":
-    dataset = JetNetGraph("../data/JetNet")
-    for data in dataset:
-        print(data)

@@ -3,12 +3,12 @@ import os.path as osp
 import torch
 import torch.nn.functional as F
 import torch_geometric.transforms as T
-from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.nn import MaskLabel, TransformerConv
 from torch_geometric.utils import index_to_mask
+from src.data.jetnet_graph import JetNetGraph
 
-root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "OGB")
-dataset = PygNodePropPredDataset("ogbn-arxiv", root, T.ToUndirected())
+root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
+dataset = JetNetGraph(root)
 
 
 class UniMP(torch.nn.Module):
@@ -41,8 +41,8 @@ class UniMP(torch.nn.Module):
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-data = dataset[0].to(device)
-data.y = data.y.view(-1)
+data = dataset.to(device)
+print(data.x.shape)
 model = UniMP(dataset.num_features, dataset.num_classes, hidden_channels=64, num_layers=3, heads=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
 
@@ -57,10 +57,9 @@ def train(label_rate=0.65):  # How many labels to use for propagation.
 
     propagation_mask = MaskLabel.ratio_mask(train_mask, ratio=label_rate)
     supervision_mask = train_mask ^ propagation_mask
-
     optimizer.zero_grad()
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    loss = F.cross_entropy(out[supervision_mask], data.y[supervision_mask])
+    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    loss = F.mse_loss(out[supervision_mask], data.x[supervision_mask])
     loss.backward()
     optimizer.step()
 
@@ -72,19 +71,15 @@ def test():
     model.eval()
 
     propagation_mask = train_mask
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    pred = out[val_mask].argmax(dim=-1)
-    val_acc = int((pred == data.y[val_mask]).sum()) / pred.size(0)
+    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    pred = out[val_mask]
 
     propagation_mask = train_mask | val_mask
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    pred = out[test_mask].argmax(dim=-1)
-    test_acc = int((pred == data.y[test_mask]).sum()) / pred.size(0)
-
-    return val_acc, test_acc
+    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    pred = out[test_mask]
 
 
 for epoch in range(1, 501):
     loss = train()
-    val_acc, test_acc = test()
-    print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, Val: {val_acc:.4f}, " f"Test: {test_acc:.4f}")
+    test()
+    print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}")
