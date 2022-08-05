@@ -11,7 +11,7 @@ RUN sudo apt-get update \
 
 ENV TORCH=1.11.0
 ENV CUDA=cu115
-    
+
 RUN set -x \
     pip3 install coffea tables mplhep jetnet weaver-core pre-commit \
     pip3 install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html

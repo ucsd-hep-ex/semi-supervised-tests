@@ -26,7 +26,6 @@ spec:
     - name: ssl-jet-vol
       persistentVolumeClaim:
         claimName: ssl-jet-vol
-  restartPolicy: Never
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:

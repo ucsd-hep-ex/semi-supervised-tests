@@ -2,19 +2,17 @@ import os.path as osp
 
 import torch
 import torch.nn.functional as F
-from ogb.nodeproppred import PygNodePropPredDataset
-
 import torch_geometric.transforms as T
+from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.nn import MaskLabel, TransformerConv
 from torch_geometric.utils import index_to_mask
 
-root = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'OGB')
-dataset = PygNodePropPredDataset('ogbn-arxiv', root, T.ToUndirected())
+root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "OGB")
+dataset = PygNodePropPredDataset("ogbn-arxiv", root, T.ToUndirected())
 
 
 class UniMP(torch.nn.Module):
-    def __init__(self, in_channels, num_classes, hidden_channels, num_layers,
-                 heads, dropout=0.3):
+    def __init__(self, in_channels, num_classes, hidden_channels, num_layers, heads, dropout=0.3):
         super().__init__()
 
         self.label_emb = MaskLabel(num_classes, in_channels)
@@ -28,8 +26,7 @@ class UniMP(torch.nn.Module):
             else:
                 out_channels = num_classes
                 concat = False
-            conv = TransformerConv(in_channels, out_channels, heads,
-                                   concat=concat, beta=True, dropout=dropout)
+            conv = TransformerConv(in_channels, out_channels, heads, concat=concat, beta=True, dropout=dropout)
             self.convs.append(conv)
             in_channels = hidden_channels
 
@@ -43,17 +40,16 @@ class UniMP(torch.nn.Module):
         return self.convs[-1](x, edge_index)
 
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 data = dataset[0].to(device)
 data.y = data.y.view(-1)
-model = UniMP(dataset.num_features, dataset.num_classes, hidden_channels=64,
-              num_layers=3, heads=2).to(device)
+model = UniMP(dataset.num_features, dataset.num_classes, hidden_channels=64, num_layers=3, heads=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
 
 split_idx = dataset.get_idx_split()
-train_mask = index_to_mask(split_idx['train'], size=data.num_nodes)
-val_mask = index_to_mask(split_idx['valid'], size=data.num_nodes)
-test_mask = index_to_mask(split_idx['test'], size=data.num_nodes)
+train_mask = index_to_mask(split_idx["train"], size=data.num_nodes)
+val_mask = index_to_mask(split_idx["valid"], size=data.num_nodes)
+test_mask = index_to_mask(split_idx["test"], size=data.num_nodes)
 
 
 def train(label_rate=0.65):  # How many labels to use for propagation.
@@ -91,5 +87,4 @@ def test():
 for epoch in range(1, 501):
     loss = train()
     val_acc, test_acc = test()
-    print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val: {val_acc:.4f}, '
-          f'Test: {test_acc:.4f}')
+    print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, Val: {val_acc:.4f}, " f"Test: {test_acc:.4f}")
