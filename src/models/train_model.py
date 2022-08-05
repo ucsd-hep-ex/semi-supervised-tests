@@ -1,10 +1,12 @@
-import os.path as osp
 import math
+import os.path as osp
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import MaskLabel, TransformerConv
 from torch_geometric.utils import index_to_mask
-import numpy as np
+
 from src.data.jetnet_graph import JetNetGraph
 
 root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
