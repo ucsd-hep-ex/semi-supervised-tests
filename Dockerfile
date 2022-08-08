@@ -26,6 +26,7 @@ RUN set -x \
 		 torch-cluster \
 		 torch-spline-conv \
 		 pyg-nightly \
+		 ogb \
 		 -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 
 RUN set -x \
