@@ -4,51 +4,54 @@ import os.path as osp
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import MaskLabel, TransformerConv
+from torch_geometric.nn import TransformerConv
 from torch_geometric.utils import index_to_mask
 
 from src.data.jetnet_graph import JetNetGraph
+from src.models.mask_feature import MaskFeature
 
 root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
 dataset = JetNetGraph(root)
 
 
 class UniMP(torch.nn.Module):
-    def __init__(self, in_channels, num_classes, hidden_channels, num_layers, heads, dropout=0.3):
+    def __init__(self, in_channels, hidden_channels, num_layers, heads, dropout=0.3):
         super().__init__()
 
-        self.label_emb = MaskLabel(num_classes, in_channels)
+        self.feature_mask = MaskFeature()
+        self.in_channels = in_channels
+        self.hidden_channels = hidden_channels
 
         self.convs = torch.nn.ModuleList()
         self.norms = torch.nn.ModuleList()
         for i in range(1, num_layers + 1):
             if i < num_layers:
-                out_channels = hidden_channels // heads
+                out_channels = self.hidden_channels // heads
                 concat = True
             else:
-                out_channels = num_classes
+                out_channels = self.in_channels
                 concat = False
             conv = TransformerConv(in_channels, out_channels, heads, concat=concat, beta=True, dropout=dropout)
             self.convs.append(conv)
-            in_channels = hidden_channels
+            in_channels = self.hidden_channels
 
             if i < num_layers:
-                self.norms.append(torch.nn.LayerNorm(hidden_channels))
+                self.norms.append(torch.nn.LayerNorm(self.hidden_channels))
 
-    def forward(self, x, y, edge_index, label_mask):
-        x = self.label_emb(x, y, label_mask)
+    def forward(self, x, edge_index, feature_mask):
+        x_mask = self.feature_mask(x, feature_mask)
         for conv, norm in zip(self.convs, self.norms):
-            x = norm(conv(x, edge_index)).relu()
-        return self.convs[-1](x, edge_index)
+            x_mask = norm(conv(x_mask, edge_index)).relu()
+        return self.convs[-1](x_mask, edge_index)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 data = dataset.data.to(device)
 
-model = UniMP(dataset.num_features, dataset.num_classes, hidden_channels=64, num_layers=3, heads=2).to(device)
+model = UniMP(dataset.num_features, hidden_channels=64, num_layers=3, heads=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
 
-tv_frac = 0.15
+tv_frac = 0.10
 tv_num = math.ceil(data.num_nodes * tv_frac)
 splits = np.cumsum([data.num_nodes - 2 * tv_num, tv_num, tv_num])
 
@@ -61,13 +64,13 @@ val_mask = index_to_mask(val_index, size=data.num_nodes)
 test_mask = index_to_mask(test_index, size=data.num_nodes)
 
 
-def train(label_rate=0.65):  # How many labels to use for propagation.
+def train(label_rate=0.50):  # Fraction of training nodes to use for propagation vs. supervision
     model.train()
 
-    propagation_mask = MaskLabel.ratio_mask(train_mask, ratio=label_rate)
+    propagation_mask = MaskFeature.ratio_mask(train_mask, ratio=label_rate)
     supervision_mask = train_mask ^ propagation_mask
     optimizer.zero_grad()
-    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    out = model(data.x, data.edge_index, propagation_mask)
     loss = F.mse_loss(out[supervision_mask], data.x[supervision_mask])
     loss.backward()
     optimizer.step()
@@ -80,19 +83,19 @@ def test():
     model.eval()
 
     propagation_mask = train_mask
-    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    out = model(data.x, data.edge_index, propagation_mask)
     pred = out[val_mask]
     val_loss = F.mse_loss(pred, data.x[val_mask])
 
     propagation_mask = train_mask | val_mask
-    out = model(data.x, data.x, data.edge_index, propagation_mask)
+    out = model(data.x, data.edge_index, propagation_mask)
     pred = out[test_mask]
     test_loss = F.mse_loss(pred, data.x[test_mask])
 
     return val_loss, test_loss
 
 
-for epoch in range(1, 501):
+for epoch in range(1, 101):
     loss = train()
     val_loss, test_loss = test()
     print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Loss: {val_loss:.4f}, Test Loss: {test_loss:.4f}")
