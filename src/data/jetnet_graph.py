@@ -7,6 +7,7 @@ from torch_geometric.data import Data, InMemoryDataset
 
 # electron
 PDG_CLASSES = ["electron", "muon", "photon", "charged_hadron", "neutral_hadron"]
+N_JETS_PER_FILE = 100_000
 
 
 def pdg_map(pdg_id):
@@ -30,7 +31,7 @@ def pdg_map(pdg_id):
 
 
 class JetNetGraph(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=1000, n_files=1):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=None, n_files=20):
         self.raw_data = None
         self.max_jets = max_jets
         self.n_files = n_files
@@ -72,7 +73,7 @@ class JetNetGraph(InMemoryDataset):
         self.raw_data = QuarkGluon(jet_type="all", file_list=self.raw_file_names)
 
     def transform_labels(self, y):
-        return torch.tensor([pdg_map(pdg_id) for pdg_id in list(y.numpy())], dtype=torch.int32)
+        return torch.tensor([pdg_map(pdg_id) for pdg_id in list(y.numpy())], dtype=torch.long)
 
     def process(self):
         # Read data into huge `Data` list.
@@ -82,17 +83,17 @@ class JetNetGraph(InMemoryDataset):
         for i, (x, _) in enumerate(self.raw_data):
             if self.max_jets is not None and i > self.max_jets:
                 break
+            # mask away particles that are zero-padded
             mask = torch.logical_and(x[:, 0] != 0, x[:, 1] != 0)
             mask = torch.logical_and(mask, x[:, 2] != 0)
             mask = torch.logical_and(mask, x[:, 3] != 0)
-            n_particles = len(x[mask])  # can use mask in the future
+            n_particles = len(x[mask])
             pairs = np.stack([[m, n] for (m, n) in itertools.product(range(n_particles), range(n_particles)) if m != n])
             edge_index = torch.tensor(pairs, dtype=torch.long)
             edge_index = edge_index.t().contiguous()
             y = x[mask][:, 3].to(torch.int32)
-            y = self.transform_labels(y).reshape(-1, 1)
-            data = Data(x=x[mask], edge_index=edge_index, y=y)
-            print(data)
+            y = self.transform_labels(y)
+            data = Data(x=x[mask][:, :3], edge_index=edge_index, y=y)
             data_list.append(data)
 
         if self.pre_filter is not None:
