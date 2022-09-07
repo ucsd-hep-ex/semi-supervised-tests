@@ -1,9 +1,10 @@
 import itertools
+import os.path as osp
 
 import numpy as np
 import torch
 from jetnet.datasets import QuarkGluon
-from torch_geometric.data import Data, InMemoryDataset
+from torch_geometric.data import Data, Dataset
 
 # electron
 PDG_CLASSES = ["electron", "muon", "photon", "charged_hadron", "neutral_hadron"]
@@ -30,11 +31,14 @@ def pdg_map(pdg_id):
     return None
 
 
-class JetNetGraph(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=None, n_files=20):
+class JetNetGraph(Dataset):
+    def __init__(
+        self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=None, n_files=20, n_jets_merge=1_000
+    ):
         self.raw_data = None
         self.max_jets = max_jets
         self.n_files = n_files
+        self.n_jets_merge = n_jets_merge
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -66,7 +70,22 @@ class JetNetGraph(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return ["qg_graph.pt"]
+        """
+        Returns a list of all the files in the processed files directory
+        """
+        if self.max_jets:
+            n_files = int(self.max_jets / self.n_jets_merge)
+        else:
+            n_files = self.n_files * N_JETS_PER_FILE
+
+        return [f"qg_graph_{i}.pt" for i in range(0, n_files)]
+
+    def len(self):
+        return len(self.processed_file_names)
+
+    def get(self, idx):
+        data = torch.load(osp.join(self.processed_dir, f"qg_graph_{idx}.pt"))
+        return data
 
     def download(self):
         # Download to `self.raw_dir`.
@@ -79,8 +98,10 @@ class JetNetGraph(InMemoryDataset):
         # Read data into huge `Data` list.
         if self.raw_data is None:
             self.raw_data = QuarkGluon(jet_type="all", file_list=self.raw_file_names)
-        data_list = []
+
         for i, (x, _) in enumerate(self.raw_data):
+            if i % self.n_jets_merge == 0:
+                data_list = []
             if self.max_jets is not None and i > self.max_jets:
                 break
             # mask away particles that are zero-padded
@@ -94,13 +115,19 @@ class JetNetGraph(InMemoryDataset):
             y = x[mask][:, 3].to(torch.int32)
             y = self.transform_labels(y)
             data = Data(x=x[mask][:, :3], edge_index=edge_index, y=y)
+
+            if self.pre_filter is not None and not self.pre_filter(data):
+                continue
+
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
+
+            # append to data list
             data_list.append(data)
 
-        if self.pre_filter is not None:
-            data_list = [data for data in data_list if self.pre_filter(data)]
-
-        if self.pre_transform is not None:
-            data_list = [self.pre_transform(data) for data in data_list]
+            if i % self.n_events_merge == self.n_events_merge - 1:
+                data_list = sum(data_list, [])
+                torch.save(data_list, osp.join(self.processed_dir, f"qg_graph_{i}.pt"))
 
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
