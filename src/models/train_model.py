@@ -1,102 +1,102 @@
-import math
+import logging
 import os.path as osp
 
-import numpy as np
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import MaskLabel, TransformerConv
-from torch_geometric.utils import index_to_mask
+from torch_geometric.data import Batch
+from torch_geometric.loader import DataListLoader
+from torch_geometric.nn import MaskLabel
 
 from src.data.jetnet_graph import JetNetGraph
+from src.models.unimp_model import UniMP
 
-root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "data", "JetNet")
-dataset = JetNetGraph(root, max_jets=1_000, n_files=1)  # just use one file, 1k jets for fast testing
-
-
-class UniMP(torch.nn.Module):
-    def __init__(self, in_channels, num_classes, hidden_channels, num_layers, heads, dropout=0.3):
-        super().__init__()
-
-        self.in_channels = in_channels
-        self.num_classes = num_classes
-        self.label_emb = MaskLabel(self.num_classes, self.in_channels)
-        self.hidden_channels = hidden_channels
-
-        self.convs = torch.nn.ModuleList()
-        self.norms = torch.nn.ModuleList()
-        for i in range(1, num_layers + 1):
-            if i < num_layers:
-                out_channels = self.hidden_channels // heads
-                concat = True
-            else:
-                out_channels = self.num_classes
-                concat = False
-            conv = TransformerConv(in_channels, out_channels, heads, concat=concat, beta=True, dropout=dropout)
-            self.convs.append(conv)
-            in_channels = self.hidden_channels
-
-            if i < num_layers:
-                self.norms.append(torch.nn.LayerNorm(self.hidden_channels))
-
-    def forward(self, x, y, edge_index, label_mask):
-        x = self.label_emb(x, y, label_mask)
-        for conv, norm in zip(self.convs, self.norms):
-            x = norm(conv(x, edge_index)).relu()
-        return self.convs[-1](x, edge_index)
+logging.basicConfig(level=logging.INFO)
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-data = dataset.data.to(device)
-
-model = UniMP(in_channels=dataset.num_features, num_classes=5, hidden_channels=64, num_layers=3, heads=2).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
-
-tv_frac = 0.10
-tv_num = math.ceil(data.num_nodes * tv_frac)
-splits = np.cumsum([data.num_nodes - 2 * tv_num, tv_num, tv_num])
-
-train_index = torch.tensor(np.arange(start=0, stop=splits[0]), dtype=torch.long)
-val_index = torch.tensor(np.arange(start=splits[0], stop=splits[1]), dtype=torch.long)
-test_index = torch.tensor(np.arange(start=splits[1], stop=data.num_nodes), dtype=torch.long)
-
-train_mask = index_to_mask(train_index, size=data.num_nodes)
-val_mask = index_to_mask(val_index, size=data.num_nodes)
-test_mask = index_to_mask(test_index, size=data.num_nodes)
-
-
-def train(label_rate=0.75):  # How many labels to use for propagation
+def train(model, loader, optimizer, label_rate=0.85, loss_fcn=F.cross_entropy):
     model.train()
 
-    propagation_mask = MaskLabel.ratio_mask(train_mask, ratio=label_rate)
-    supervision_mask = train_mask ^ propagation_mask
+    sum_loss = 0
+    sum_true = 0
+    sum_all = 0
+    for i, data in enumerate(loader):
+        optimizer.zero_grad()
 
-    optimizer.zero_grad()
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    loss = F.cross_entropy(out[supervision_mask], data.y[supervision_mask])
-    loss.backward()
-    optimizer.step()
+        train_mask = torch.ones_like(data.x[:, 0], dtype=torch.bool)
+        propagation_mask = MaskLabel.ratio_mask(train_mask, ratio=label_rate)
+        supervision_mask = train_mask ^ propagation_mask
 
-    return float(loss)
+        out = model(data.x, data.y, data.edge_index, propagation_mask)
+        loss = loss_fcn(out[supervision_mask], data.y[supervision_mask])
+        loss.backward()
+        sum_loss += float(loss)
+        optimizer.step()
+
+        pred = out[supervision_mask].argmax(dim=-1)
+        sum_true += int((pred == data.y[supervision_mask]).sum())
+        sum_all += pred.size(0)
+        logging.info(f"Batch: {i + 1:03d}, Train Loss: {sum_loss:.4f}")
+
+    return float(sum_loss) / (i + 1), float(sum_true) / sum_all
 
 
 @torch.no_grad()
-def test():
+def test(model, loader, label_rate=0.85):
     model.eval()
 
-    propagation_mask = train_mask
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    pred = out[val_mask].argmax(dim=-1)
-    val_acc = int((pred == data.y[val_mask]).sum()) / pred.size(0)
+    sum_true = 0
+    sum_all = 0
+    for data in loader:
 
-    propagation_mask = train_mask | val_mask
-    out = model(data.x, data.y, data.edge_index, propagation_mask)
-    pred = out[test_mask].argmax(dim=-1)
-    test_acc = int((pred == data.y[test_mask]).sum()) / pred.size(0)
+        test_mask = torch.ones_like(data.x[:, 0], dtype=torch.bool)
+        propagation_mask = MaskLabel.ratio_mask(test_mask, ratio=label_rate)
+        supervision_mask = test_mask ^ propagation_mask
 
-    return val_acc, test_acc
+        out = model(data.x, data.y, data.edge_index, propagation_mask)
+        pred = out[supervision_mask].argmax(dim=-1)
+        sum_true += int((pred == data.y[supervision_mask]).sum())
+        sum_all += pred.size(0)
+
+    return float(sum_true) / sum_all
 
 
-for epoch in range(1, 101):
-    loss = train()
-    val_acc, test_acc = test()
-    print(f"Epoch: {epoch:03d}, Train Loss: {loss:.4f}, Val Acc: {val_acc:.4f}, Test Acc: {test_acc:.4f}")
+def collate_fn(items):
+    sum_list = sum(items, [])
+    return Batch.from_data_list(sum_list)
+
+
+def main():
+    train_root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "..", "data", "train")
+    val_root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "..", "data", "val")
+    train_dataset = JetNetGraph(train_root, max_jets=10_000, file_start=0, file_stop=1)
+    val_dataset = JetNetGraph(val_root, max_jets=10_000, file_start=1, file_stop=2)
+    batch_size = 1
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    train_loader = DataListLoader(train_dataset, batch_size=batch_size, pin_memory=True, shuffle=True)
+    train_loader.collate_fn = collate_fn
+    val_loader = DataListLoader(val_dataset, batch_size=batch_size, pin_memory=True, shuffle=False)
+    val_loader.collate_fn = collate_fn
+
+    model = UniMP(
+        in_channels=train_dataset.num_features,
+        num_classes=train_dataset.num_classes,
+        hidden_channels=64,
+        num_layers=3,
+        heads=2,
+    ).to(device)
+
+    logging.info("Model summary")
+    logging.info(model)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
+
+    for epoch in range(1, 101):
+        train_loss, train_acc = train(model, train_loader, optimizer)
+        val_acc = test(model, val_loader)
+        logging.info(f"Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+
+
+if __name__ == "__main__":
+    main()
