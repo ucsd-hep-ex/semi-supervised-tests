@@ -1,13 +1,16 @@
-import itertools
+import logging
 import os.path as osp
+from glob import glob
 
-import numpy as np
 import torch
 from jetnet.datasets import QuarkGluon
 from torch_geometric.data import Data, Dataset
 
+logging.basicConfig(level=logging.INFO)
+
 # electron
 PDG_CLASSES = ["electron", "muon", "photon", "charged_hadron", "neutral_hadron"]
+FEATURES = ["pt", "eta", "phi"]
 N_JETS_PER_FILE = 100_000
 
 
@@ -33,14 +36,28 @@ def pdg_map(pdg_id):
 
 class JetNetGraph(Dataset):
     def __init__(
-        self, root, transform=None, pre_transform=None, pre_filter=None, max_jets=None, n_files=20, n_jets_merge=1_000
+        self,
+        root,
+        transform=None,
+        pre_transform=None,
+        pre_filter=None,
+        max_jets=None,
+        file_start=0,
+        file_stop=1,
+        n_jets_merge=1_000,
     ):
+        if file_stop < file_start:
+            raise RuntimeError(f"Expect file_start={file_start} <= file_stop={file_stop}")
+        elif file_stop == file_start:
+            file_stop = file_start + 1  # for easier indexing
+
+        self.file_start = file_start
+        self.file_stop = file_stop
         self.raw_data = None
         self.max_jets = max_jets
-        self.n_files = n_files
+        self.n_files = file_stop - file_start
         self.n_jets_merge = n_jets_merge
         super().__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
 
     @property
     def raw_file_names(self):
@@ -66,30 +83,40 @@ class JetNetGraph(Dataset):
             "QG_jets_withbc_17.npz",
             "QG_jets_withbc_18.npz",
             "QG_jets_withbc_19.npz",
-        ][: self.n_files]
+        ][self.file_start : self.file_stop]
 
     @property
     def processed_file_names(self):
         """
         Returns a list of all the files in the processed files directory
         """
-        if self.max_jets:
-            n_files = int(self.max_jets / self.n_jets_merge)
-        else:
-            n_files = self.n_files * N_JETS_PER_FILE
-
-        return [f"qg_graph_{i}.pt" for i in range(0, n_files)]
+        proc_list = glob(osp.join(self.processed_dir, "qg_graph_*.pt"))
+        return_list = list(map(osp.basename, proc_list))
+        return return_list
 
     def len(self):
         return len(self.processed_file_names)
 
     def get(self, idx):
-        data = torch.load(osp.join(self.processed_dir, f"qg_graph_{idx}.pt"))
+        p = osp.join(self.processed_dir, self.processed_file_names[idx])
+        data = torch.load(p)
         return data
+
+    @property
+    def num_features(self):
+        return len(FEATURES)
+
+    @property
+    def num_classes(self):
+        return len(PDG_CLASSES)
+
+    @property
+    def num_nodes(self):
+        return sum([data.num_nodes for data_list in self for data in data_list])
 
     def download(self):
         # Download to `self.raw_dir`.
-        self.raw_data = QuarkGluon(jet_type="all", file_list=self.raw_file_names)
+        self.raw_data = QuarkGluon(jet_type="all", file_list=self.raw_file_names, data_dir=self.raw_dir)
 
     def transform_labels(self, y):
         return torch.tensor([pdg_map(pdg_id) for pdg_id in list(y.numpy())], dtype=torch.long)
@@ -99,19 +126,21 @@ class JetNetGraph(Dataset):
         if self.raw_data is None:
             self.raw_data = QuarkGluon(jet_type="all", file_list=self.raw_file_names)
 
+        data_list = []
         for i, (x, _) in enumerate(self.raw_data):
-            if i % self.n_jets_merge == 0:
-                data_list = []
-            if self.max_jets is not None and i > self.max_jets:
+            if self.max_jets is not None and i >= self.max_jets:
                 break
             # mask away particles that are zero-padded
             mask = torch.logical_and(x[:, 0] != 0, x[:, 1] != 0)
             mask = torch.logical_and(mask, x[:, 2] != 0)
             mask = torch.logical_and(mask, x[:, 3] != 0)
+            # get all pairs of particles for edges (both directions)
             n_particles = len(x[mask])
-            pairs = np.stack([[m, n] for (m, n) in itertools.product(range(n_particles), range(n_particles)) if m != n])
-            edge_index = torch.tensor(pairs, dtype=torch.long)
-            edge_index = edge_index.t().contiguous()
+            particle_idx = torch.arange(n_particles, dtype=torch.long)
+            pairs = torch.cartesian_prod(particle_idx, particle_idx)
+            # remove self loops
+            pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+            edge_index = pairs.t().contiguous()
             y = x[mask][:, 3].to(torch.int32)
             y = self.transform_labels(y)
             data = Data(x=x[mask][:, :3], edge_index=edge_index, y=y)
@@ -123,11 +152,22 @@ class JetNetGraph(Dataset):
                 data = self.pre_transform(data)
 
             # append to data list
-            data_list.append(data)
+            data_list.append([data])
 
-            if i % self.n_events_merge == self.n_events_merge - 1:
-                data_list = sum(data_list, [])
-                torch.save(data_list, osp.join(self.processed_dir, f"qg_graph_{i}.pt"))
+            if i % self.n_jets_merge == self.n_jets_merge - 1:
+                # sum into big list
+                datas = sum(data_list, [])
+                logging.info(f"Saving qg_graph_{i}.pt")
+                torch.save(datas, osp.join(self.processed_dir, f"qg_graph_{i}.pt"))
+                # reset to empty data list
+                data_list = []
 
-        data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
+        # check if there are any leftovers, and save
+        if data_list:
+            datas = sum(data_list, [])
+            torch.save(datas, osp.join(self.processed_dir, f"qg_graph_{i - 1}.pt"))
+
+
+if __name__ == "__main__":
+    root = osp.join(osp.dirname(osp.realpath(__file__)), "..", "..", "data", "tmp")
+    dataset = JetNetGraph(root, max_jets=10_000, file_start=0, file_stop=1)
